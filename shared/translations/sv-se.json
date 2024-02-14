@@ -321,7 +321,7 @@
     },
     {
         "term": "class_id:board_tile.rail.one_way",
-        "definition": "Enkel",
+        "definition": "Enkelriktad",
         "context": "",
         "term_plural": "",
         "reference": "",
@@ -353,7 +353,7 @@
     },
     {
         "term": "class_id:board_tile.rail.straight",
-        "definition": "Raka spåret",
+        "definition": "Rak",
         "context": "",
         "term_plural": "",
         "reference": "",
@@ -3037,7 +3037,7 @@
     },
     {
         "term": "qtapp.mainmenu:save_world",
-        "definition": "Rädda världen",
+        "definition": "Spara världen",
         "context": "",
         "term_plural": "",
         "reference": "",
