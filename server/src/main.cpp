@@ -22,6 +22,7 @@
 
 #include <iostream>
 #include <functional>
+#include <memory>
 #include "options.hpp"
 #include "traintastic/traintastic.hpp"
 #include "log/log.hpp"
@@ -29,13 +30,63 @@
 #include <traintastic/utils/standardpaths.hpp>
 #ifdef __unix__
   #include "os/unix/daemonize.hpp"
-  #include "os/unix/writepidfile.hpp"
+  #include "os/unix/pidfile.hpp"
   #include "os/unix/setgroupid.hpp"
   #include "os/unix/setuserid.hpp"
 #elif defined(WIN32)
   #include "os/windows/consolewindow.hpp"
   #include "os/windows/trayicon.hpp"
 #endif
+
+namespace
+{
+#ifdef WIN32
+  class TrayIconGuard
+  {
+    bool m_enabled;
+    public:
+      TrayIconGuard(bool enabled, bool restart) : m_enabled(enabled)
+      {
+        if(m_enabled)
+          Windows::TrayIcon::add(restart);
+      }
+      ~TrayIconGuard()
+      {
+        if(m_enabled)
+          Windows::TrayIcon::remove();
+      }
+  };
+#endif
+
+#ifdef __unix__
+  using ScopedPIDFile = Unix::PIDFile;
+#endif
+
+  void setupLocale(const Settings::PreStart& settings)
+  {
+    const auto localePath = getLocalePath();
+    Locale::instance = std::make_unique<Locale>(localePath / "en-us.lang",
+      std::make_unique<Locale>(localePath / "neutral.lang"));
+    if(settings.language != "en-us")
+    {
+      Locale::instance = std::make_unique<Locale>((localePath / settings.language) += ".lang",
+        std::move(Locale::instance));
+    }
+  }
+
+  void setupLogging(const Settings::PreStart& settings, const std::filesystem::path& dataDir)
+  {
+    if(settings.memoryLoggerSize > 0)
+      Log::enableMemoryLogger(settings.memoryLoggerSize);
+    else
+      Log::disableMemoryLogger();
+
+    if(settings.enableFileLogger)
+      Log::enableFileLogger(dataDir / "log" / "traintastic.txt");
+    else
+      Log::disableFileLogger();
+  }
+}
 
 int main(int argc, char* argv[])
 {
@@ -64,9 +115,6 @@ int main(int argc, char* argv[])
 
   try
   {
-    if(!options.pidFile.empty())
-      Unix::writePIDFile(options.pidFile);
-
     if(!options.group.empty())
       Unix::setGroupID(options.group);
 
@@ -78,6 +126,23 @@ int main(int argc, char* argv[])
     if(!options.daemonize)
       std::cerr << e.what() << std::endl;
     exit(EXIT_FAILURE);
+  }
+#endif
+
+#ifdef __unix__
+  std::unique_ptr<ScopedPIDFile> pidFile;
+  if(!options.pidFile.empty())
+  {
+    try
+    {
+      pidFile = std::make_unique<ScopedPIDFile>(options.pidFile);
+    }
+    catch(const std::exception& e)
+    {
+      if(!options.daemonize)
+        std::cerr << e.what() << std::endl;
+      exit(EXIT_FAILURE);
+    }
   }
 #elif defined(WIN32)
   if(options.tray)
@@ -95,38 +160,21 @@ int main(int argc, char* argv[])
 
   do
   {
+    const auto settings = Settings::getPreStartSettings(dataDir);
+    try
     {
-      const auto settings = Settings::getPreStartSettings(dataDir);
-
-      const auto localePath = getLocalePath();
-      try
-      {
-        Locale::instance = std::make_unique<Locale>(localePath / "en-us.lang", std::make_unique<Locale>(localePath / "neutral.lang"));
-        if(settings.language != "en-us")
-        {
-          Locale::instance = std::make_unique<Locale>((localePath / settings.language) += ".lang", std::move(Locale::instance));
-        }
-      }
-      catch(const std::exception& e)
-      {
-        std::cerr << e.what() << std::endl;
-        exit(EXIT_FAILURE);
-      }
-
-      if(settings.memoryLoggerSize > 0)
-        Log::enableMemoryLogger(settings.memoryLoggerSize);
-      else
-        Log::disableMemoryLogger();
-
-      if(settings.enableFileLogger)
-        Log::enableFileLogger(dataDir / "log" / "traintastic.txt");
-      else
-        Log::disableFileLogger();
+      setupLocale(settings);
+    }
+    catch(const std::exception& e)
+    {
+      std::cerr << e.what() << std::endl;
+      exit(EXIT_FAILURE);
     }
 
+    setupLogging(settings, dataDir);
+
 #ifdef WIN32
-    if(options.tray)
-      Windows::TrayIcon::add(restart);
+    TrayIconGuard tray(options.tray, restart);
 #endif
 
     try
@@ -162,10 +210,6 @@ int main(int argc, char* argv[])
       status = EXIT_FAILURE;
     }
 
-#ifdef WIN32
-    if(options.tray)
-      Windows::TrayIcon::remove();
-#endif
 
     if(Traintastic::instance)
     {
